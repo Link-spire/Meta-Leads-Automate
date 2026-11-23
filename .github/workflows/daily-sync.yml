@@ -1,0 +1,85 @@
+name: Daily lead sync
+
+# 00:05 UTC is 05:05 in Pakistan. SYNC_ON_START=true reads SYNC_LOOKBACK_DAYS once (default 90).
+# After that, and when SYNC_ON_START=false, the run reads the whole previous UTC day:
+# midnight on 24 Nov reads 23 Nov, and midnight on 25 Nov reads 24 Nov.
+# Pass a UTC day to re-read that one day. Scheduled runs happen from the default branch.
+on:
+  schedule:
+    - cron: "5 0 * * *"
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "Optional UTC day (YYYY-MM-DD). Leave empty to sync the whole previous UTC day."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-lead-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sync leads into MySQL
+        env:
+          REQUESTED_DAY: ${{ inputs.day }}
+          META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
+          META_PAGE_ID: ${{ secrets.META_PAGE_ID }}
+          META_ACCESS_TOKEN_2: ${{ secrets.META_ACCESS_TOKEN_2 }}
+          META_PAGE_ID_2: ${{ secrets.META_PAGE_ID_2 }}
+          META_FORM_IDS: ${{ secrets.META_FORM_IDS }}
+          META_CAMPAIGN_FILTER: ${{ secrets.META_CAMPAIGN_FILTER }}
+          META_FORM_FILTER: ${{ secrets.META_FORM_FILTER }}
+          META_GRAPH_VERSION: ${{ secrets.META_GRAPH_VERSION }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SYNC_ON_START: ${{ secrets.SYNC_ON_START }}
+          SYNC_LOOKBACK_DAYS: ${{ secrets.SYNC_LOOKBACK_DAYS }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "Add the DATABASE_URL secret. Use the same mysql:// URL as the hosted database."
+            echo "In Hostinger Remote MySQL, allow any host. GitHub runners do not keep one IP address."
+            exit 1
+          fi
+          case "${DATABASE_URL}" in
+            mysql://*) ;;
+            *)
+              echo "DATABASE_URL must start with mysql://. A sqlite file on this runner is deleted when the job ends."
+              exit 1
+              ;;
+          esac
+          if [ -z "${META_ACCESS_TOKEN}" ] || [ -z "${META_PAGE_ID}" ]; then
+            echo "Add the META_ACCESS_TOKEN and META_PAGE_ID secrets."
+            exit 1
+          fi
+          if [ -z "${META_ACCESS_TOKEN_2}" ] || [ -z "${META_PAGE_ID_2}" ]; then
+            echo "Add the META_ACCESS_TOKEN_2 and META_PAGE_ID_2 secrets. The second Page is not synced without them."
+            exit 1
+          fi
+
+          if [ -n "${REQUESTED_DAY}" ]; then
+            if ! printf "%s" "${REQUESTED_DAY}" | grep -Eq "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"; then
+              echo "Expected YYYY-MM-DD, got: ${REQUESTED_DAY}"
+              exit 2
+            fi
+            echo "Syncing the requested UTC day ${REQUESTED_DAY}."
+            npm run sync -- "${REQUESTED_DAY}"
+          else
+            echo "Syncing the whole previous UTC day."
+            npm run sync -- auto
+          fi
