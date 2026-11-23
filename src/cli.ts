@@ -36,7 +36,7 @@ async function main() {
     const day = args[0];
     const database = await openDatabase(settings);
     try {
-      let window = undefined as ReturnType<typeof utcDayWindow>;
+      let window: ReturnType<typeof utcDayWindow> | undefined;
       const backfill = day === "auto" && settings.syncOnStart && !(await database.hasLookback());
       if (day === "auto") {
         // SYNC_ON_START=true reads SYNC_LOOKBACK_DAYS once. After that, and whenever it is false,
